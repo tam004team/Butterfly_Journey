@@ -1,0 +1,1795 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>遊戲頁</title>
+  <style>
+    /* 預設樣式重設與背景色 */
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: transparent;//background-color: #234c2f;
+      color: white;
+      //text-align: center;
+    }
+
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background-color: transparent;//rgba(0, 0, 0, 0.8);
+      touch-action: none;
+    }
+
+    /* 遊戲畫布 */
+    canvas {
+      position: absolute;     /* 把兩張 canvas 疊在容器裡 */
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #game-canvas { z-index: 0; }
+    #mask-canvas { z-index: 10; pointer-events: none; }
+    #ui-canvas   { z-index: 20; pointer-events: none; }
+
+    /* 升級選項卡 */
+    #upgrade-container {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      z-index: 1000;
+    }
+    .upgrade-card {
+      background: rgba(0,0,0,0.85);
+      border: 2px solid #fff;
+      border-radius: 10px;
+      padding: 15px;
+      width: 200px;
+      color: white;
+      cursor: pointer;
+      text-align: center;
+      transition: transform 0.15s ease;
+    }
+    .upgrade-card:hover {
+      transform: scale(1.05);
+      border-color: yellow;
+    }
+    .upgrade-name {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    .upgrade-desc {
+      font-size: 14px;
+    }
+
+    /* 對話框整體位置與樣式 */
+    #knowledge-dialog {
+      position: absolute;
+      z-index: 1000;
+      pointer-events: auto;
+    }
+
+    #dialog-box {
+      background: white;
+      border: 2px solid black;
+      border-radius: 10px;
+      padding: 15px;
+      width: auto;
+      box-shadow: 0 0 10px rgba(0,0,0,0.4);
+    }
+
+    #dialog-text {
+      font-size: 16px;
+      margin-bottom: 10px;
+      color: black;
+      text-align: center;
+    }
+
+    #dialog-continue-btn {
+      padding: 6px 12px;
+      background-color: #339933;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      display: block; /* 讓按鈕變成區塊元素，才能使用 margin */
+      margin: 0 auto 0 auto; /* 上間距20px，自動左右置中 */
+    }
+    #dialog-continue-btn:hover { background: #63b3ed; }
+
+    /* 虛擬搖桿區 */
+    #joystick-container {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      background-color: rgba(255, 255, 255, 0.05);
+      border-radius: 50%;
+      touch-action: none;
+      z-index: 20;
+      display: none; /* 一開始不顯示 */
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #aaa;
+      pointer-events: none; /* 重要！避免攔截滑動 */
+    }
+
+    #joystick {
+      width: 40px;
+      height: 40px;
+      background-color: rgba(0, 255, 0, 0.5);
+      border-radius: 50%;
+      position: relative;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game-canvas" width="800" height="800"></canvas>
+    <canvas id="mask-canvas" width="800" height="800"></canvas> <!-- 上層畫黑色遮罩 -->
+    <canvas id="ui-canvas" width="800" height="800"></canvas>   <!-- UI & 毛毛蟲 -->
+
+    <!-- 升級選項容器 -->
+    <div id="upgrade-container" style="display:none;">
+      <div class="upgrade-card" onclick="pickUpgradeFromUI(0)">
+        <div class="upgrade-name" id="upgrade-name-0"></div>
+        <div class="upgrade-desc" id="upgrade-desc-0"></div>
+      </div>
+      <div class="upgrade-card" onclick="pickUpgradeFromUI(1)">
+        <div class="upgrade-name" id="upgrade-name-1"></div>
+        <div class="upgrade-desc" id="upgrade-desc-1"></div>
+      </div>
+      <div class="upgrade-card" onclick="pickUpgradeFromUI(2)">
+        <div class="upgrade-name" id="upgrade-name-2"></div>
+        <div class="upgrade-desc" id="upgrade-desc-2"></div>
+      </div>
+    </div>
+
+    <!-- 對話框容器 -->
+    <div id="knowledge-dialog" style="display: none;">
+      <div id="dialog-box">
+        <div id="dialog-text"></div>
+        <button id="dialog-continue-btn">繼續</button>
+      </div>
+    </div>
+
+    <!-- 虛擬搖桿 -->
+    <div id="joystick-container">
+      <div id="joystick"></div>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById("game-canvas");
+    const ctx = canvas.getContext("2d");
+    const maskCanvas = document.getElementById("mask-canvas");
+    const maskCtx = maskCanvas.getContext("2d");
+    const uiCanvas = document.getElementById("ui-canvas");
+    const uiCtx = uiCanvas.getContext("2d");
+    let isButterfly = false;  // 預設是毛毛蟲狀態，有視野限制
+
+    let caterpillarImg = new Image();
+    caterpillarImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/caterpillar.png';
+    const grassImg = new Image();
+    grassImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/bg.png';
+
+    const butterflyImg = new Image();
+    butterflyImg.src = "https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/butterfly.png";
+
+    const energyBar = document.getElementById("energy-fill");
+    const healthBar = document.getElementById("health-fill");
+    let isUsingJoystick = false;
+
+    const game = {
+      width: canvas.width,
+      height: canvas.height,
+      running: true,
+    };
+
+    // ============= 主角毛毛蟲 ===============================
+    const caterpillar = {
+      worldX: 0, // 以世界為基準的座標
+      worldY: 0,
+      radius: 30,
+      speed: 2,
+      energy: 100,
+      health: 100,     // 當前血量
+      maxHealth: 100,  // 血量上限
+      vx: 0,
+      vy: 0,
+      facingAngle: Math.PI / 2,
+      level: 1,
+      exp: 0,
+      expToNext: 20,
+      regenRate: 0,        // 每秒回血比例（0.01 = 1%）
+      hasRegen: false,
+      energyGainMult: 1,   // 吃乳草得到能量的倍率（1.0 = 原量）
+      nectarSpeedMult: 1,  // 吸花蜜速度的倍率（1.0 = 原量）
+      isStuck: false,      // 被蜘蛛網纏住
+      damageFlashTime: 0,
+
+      // stealth 相關欄位（新增）
+      hasStealth: false,      // 由升級啟用（你的 apply() 已會設 true）
+      isStealthed: false,     // 當前是否處於隱形狀態
+      stoppedSince: null,     // 若靜止，記錄開始靜止的時間（ms）
+      stealthAlpha: 0.45      // 隱形時畫面透明度
+    };
+
+    function drawPlayer() { // === 畫毛毛蟲 ===
+      uiCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height); // 每次清掉舊的遮罩
+      if (caterpillarImg.complete) {
+        const size = caterpillar.radius * 2;
+
+        // 計算角度（使用 vx 和 vy 計算移動方向）
+        const angle = Math.atan2(caterpillar.vy, caterpillar.vx); // (x, y)與 x 軸正向的夾角
+
+        // 有移動才更新角度
+        if (caterpillar.vx !== 0 || caterpillar.vy !== 0) {
+          caterpillar.facingAngle = angle;
+        }
+
+        uiCtx.save();
+        uiCtx.translate(game.width / 2, game.height / 2); // 固定畫在螢幕中心
+        uiCtx.rotate((caterpillar.facingAngle || 0) + Math.PI / 2);
+
+        // 設定透明度：若隱形就使用 stealthAlpha
+        uiCtx.globalAlpha = caterpillar.isStealthed ? caterpillar.stealthAlpha : 1.0;
+
+        // 設定陰影來模擬外框
+        if (caterpillar.damageFlashTime > 0) {
+          uiCtx.shadowColor = 'red';
+          uiCtx.shadowBlur = 20; // 模糊值，越小描邊越銳利；越大越柔和。
+        } else {
+          uiCtx.shadowColor = 'black';
+          uiCtx.shadowBlur = 20;
+        } 
+        uiCtx.shadowOffsetX = 0;
+        uiCtx.shadowOffsetY = 0;
+
+        // 畫毛毛蟲圖片（陰影會圍繞透明部分）
+        uiCtx.drawImage(
+          caterpillarImg,
+          -caterpillar.radius,
+          -caterpillar.radius,
+          size,
+          size
+        );
+
+        // 恢復 alpha（非常重要）
+        uiCtx.globalAlpha = 1.0;
+
+        uiCtx.restore();
+      } else {
+        // 圖片未載入時用圓形
+        uiCtx.beginPath();
+        uiCtx.arc(caterpillar.x, caterpillar.y, caterpillar.radius, 0, Math.PI * 2);
+        uiCtx.fillStyle = "#00ff00";
+        uiCtx.fill();
+      }
+    }
+
+    const camera = { // 相機偏移計算
+      x: 0,
+      y: 0
+    };
+
+    // 毛毛蟲視野設定
+    const caterpillarVision = {
+      angle: Math.PI / 3, // 60 度視野
+      range: 200 // 視野距離
+    };
+
+    // 畫黑色遮罩並挖出視野
+    function drawVisionMask() {
+      if (isButterfly) return;  // 是蝴蝶就不畫遮罩
+      maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height); // 每次清掉舊的遮罩
+
+      // Step 1: 黑色遮罩
+      maskCtx.fillStyle = "rgba(0, 0, 0, 0.95)";
+      maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+
+      // Step 2: 挖出視野
+      maskCtx.globalCompositeOperation = "destination-out";
+      maskCtx.beginPath();
+      maskCtx.moveTo(game.width / 2, game.height / 2);
+      maskCtx.arc(
+        game.width / 2, // x 中心點
+        game.height / 2, // y 中心點
+        caterpillarVision.range, // 半徑
+        caterpillar.facingAngle - caterpillarVision.angle / 2, // 起始角度
+        caterpillar.facingAngle + caterpillarVision.angle / 2 // 結束角度
+      );
+      maskCtx.closePath();
+      maskCtx.fill();
+
+      maskCtx.globalCompositeOperation = "source-over"; // 還原混合模式
+    }
+
+
+    // ======================== 鍵盤控制 =================================================================
+    const keys = {};
+    document.addEventListener("keydown", (e) => {
+      keys[e.key.toLowerCase()] = true;
+      isUsingJoystick = false;
+    });
+    document.addEventListener("keyup", (e) => {
+      keys[e.key.toLowerCase()] = false;
+    });
+    // ---------------------乳草-------------------------------------
+    const milkweeds = [];
+    const milkweedImg = new Image();
+    milkweedImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/milkweed.png';
+    
+    let milkweedKnowledgeShown = false;
+    
+    function spawnMilkweed() {
+      const spawnX = caterpillar.worldX + (Math.random() - 0.5) * 800;
+      const spawnY = caterpillar.worldY + (Math.random() - 0.5) * 800;
+
+      milkweeds.push({
+        x: spawnX,
+        y: spawnY,
+        spawnTime: Date.now(),
+        lifespan: 10000 // 10 秒後消失
+      });
+    }
+    function updateMilkweeds() {
+      const now = Date.now();
+      for (let i = milkweeds.length - 1; i >= 0; i--) {
+        if (now - milkweeds[i].spawnTime > milkweeds[i].lifespan) {
+          milkweeds.splice(i, 1); // 移除過期乳草
+        }
+      }
+
+      if (!milkweedKnowledgeShown && !isGamePaused) {
+        for (let i = 0; i < milkweeds.length; i++) {
+          const mw = milkweeds[i];
+
+          const dx = mw.x - caterpillar.worldX;
+          const dy = mw.y - caterpillar.worldY;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < caterpillarVision.range) {
+            // 計算毛毛蟲面對的方向向量
+            const dirX = Math.cos(caterpillar.facingAngle);
+            const dirY = Math.sin(caterpillar.facingAngle);
+
+            // 計算乳草方向向量的單位向量
+            const toMilkweedX = dx / dist;
+            const toMilkweedY = dy / dist;
+
+            // 內積結果即兩角度差之餘弦值
+            const dot = dirX * toMilkweedX + dirY * toMilkweedY;
+            const angleBetween = Math.acos(dot);
+
+            if (angleBetween < caterpillarVision.angle / 2) {
+              // ✅ 在視野範圍內
+              showKnowledgeDialog(
+                [
+                  "乳草是毛毛蟲唯一的食物。",
+                  "對其他動物而言，乳草是劇毒的",
+                  "因此毛毛蟲能吸收毒素讓自身變毒，嚇阻天敵"
+                ],
+                (mw.x - camera.x > 400) ? (mw.x - camera.x - 160) : (mw.x - camera.x + 160),
+                (mw.y - camera.y > 400) ? (mw.y - camera.y - 160) : (mw.y - camera.y + 160)
+              );
+              milkweedKnowledgeShown = true;
+              isGamePaused = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!caterpillar.isStealthed) {
+        // === 檢查毛毛蟲與乳草碰撞 ===
+        for (let i = milkweeds.length - 1; i >= 0; i--) {
+          const dx = caterpillar.worldX - milkweeds[i].x;
+          const dy = caterpillar.worldY - milkweeds[i].y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < caterpillar.radius + 20) { // 20 是乳草半徑
+            // 能量回復（上限 100）
+            const baseGain = 10;
+            const gain = Math.round(baseGain * (1 + (caterpillar.energyGainMult || 0)));
+            caterpillar.energy = Math.min(100, caterpillar.energy + gain);
+
+            // 經驗值增加（用你現有的系統）
+            gainExp(10); // 每顆乳草給 10 點經驗
+
+            // 移除乳草
+            milkweeds.splice(i, 1);
+          }
+        }
+      }
+    }
+    function drawMilkweeds() {
+      milkweeds.forEach(m => {
+        const screenX = m.x - camera.x;
+        const screenY = m.y - camera.y;
+        ctx.save();
+
+        // 設定陰影來模擬外框
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 20; // 模糊值
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+
+        // 繪製乳草
+        ctx.drawImage(milkweedImg, screenX - 20, screenY - 20, 40, 40);
+
+        ctx.restore();
+      });
+    }
+    // -------------------- 花的資料 --------------------
+    let flowers = [];
+    let flowerSpawnInterval;
+    const flowerImg = new Image();
+    flowerImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/flower.png';
+
+    const poisonFlowerImg = new Image();
+    poisonFlowerImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/poisoned_flower.png';
+
+    // 吸食進度
+    let feedingFlower = null;
+    let feedingProgress = 0;
+    let feedingTime = 3000; // 3 秒（毫秒）
+
+    let flowerKnowledgeShown = false;
+    let poisonedflowerKnowledgeShown = false;
+
+    // -------------------- 生成花（羽化後才啟動） --------------------
+    function spawnFlower() {
+      const spawnX = caterpillar.worldX + (Math.random() - 0.5) * 800;
+      const spawnY = caterpillar.worldY + (Math.random() - 0.5) * 800;
+
+      // 30% 機率生成毒花
+      const isPoisonous = Math.random() < 0.2;
+
+      flowers.push({
+        x: spawnX,
+        y: spawnY,
+        spawnTime: Date.now(),
+        lifespan: 10000, // 10 秒後消失
+        poisonous: isPoisonous
+      });
+    }
+
+    // -------------------- 更新花的吸食邏輯 --------------------
+    function updateFlowers() {
+      const now = Date.now();
+      for (let i = flowers.length - 1; i >= 0; i--) {
+        if (now - flowers[i].spawnTime > flowers[i].lifespan) {
+          flowers.splice(i, 1); // 移除過期花
+        }
+      }
+
+      if (!isGamePaused) {
+        for (let i = 0; i < flowers.length; i++) {
+          const f = flowers[i];
+
+          const dx = f.x - caterpillar.worldX;
+          const dy = f.y - caterpillar.worldY;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < 400) {
+            if (f.poisonous && !poisonedflowerKnowledgeShown) {
+              showKnowledgeDialog(
+                [
+                  "被撒過農藥的花 (紫花) 是有毒的。",
+                  "人類對於農地的開發，也使各種動物原始棲地喪失。",
+                  "全球暖化導致的氣候變遷也使得蝴蝶遷徙更加困難。"
+                ],
+                (f.x - camera.x > 400) ? (f.x - camera.x - 160) : (f.x - camera.x + 160),
+                (f.y - camera.y > 400) ? (f.y - camera.y - 160) : (f.y - camera.y + 160)
+              );
+              poisonedflowerKnowledgeShown = true;
+              isGamePaused = true;
+              break;
+            } else if (!f.poisonous && !flowerKnowledgeShown) {
+              showKnowledgeDialog(
+                [
+                  "花是蝴蝶的食物。",
+                  "不同於幼蟲，蝴蝶以捲曲口器吸取花蜜，",
+                  "並在飛行過程中為花朵授粉，",
+                  "成為植物繁殖的關鍵媒介。"
+                ],
+                (f.x - camera.x > 400) ? (f.x - camera.x - 160) : (f.x - camera.x + 160),
+                (f.y - camera.y > 400) ? (f.y - camera.y - 160) : (f.y - camera.y + 160)
+              );
+              flowerKnowledgeShown = true;
+              isGamePaused = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!caterpillar.isStealthed) {
+        // === 檢查蝴蝶與花碰撞 ===
+        let isCollidingWithFlower = false;
+
+        for (let i = 0; i < flowers.length; i++) {
+          const f = flowers[i];
+          const dx = caterpillar.worldX - f.x;
+          const dy = caterpillar.worldY - f.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < caterpillar.radius + 20) { // 半徑 20 的花
+            isCollidingWithFlower = true;
+
+            // 如果不是同一朵花，重置進度
+            if (feedingFlower !== f) {
+              feedingFlower = f;
+              feedingProgress = 0;
+            }
+
+            feedingProgress += deltaTime;
+
+            // 吸食完成
+            if (feedingProgress >= feedingTime) {
+              if (f.poisonous) { // 毒花：扣血，不加能量 & 經驗
+                caterpillar.health = Math.max(0, caterpillar.health - 30);
+                caterpillar.damageFlashTime = 0.5;
+              } else {
+                // 獎勵：和乳草一樣
+                caterpillar.energy = Math.min(100, caterpillar.energy + (20 * (caterpillar.energyGainMult || 1)));
+                gainExp(20 * (caterpillar.expGainMult || 1));
+              }
+              // 移除花
+              flowers.splice(i, 1);
+              feedingFlower = null;
+              feedingProgress = 0;
+            }
+            break;
+          }
+        }
+
+        if (!isCollidingWithFlower) {
+          feedingFlower = null;
+          feedingProgress = 0;
+        }
+      }
+    }
+
+    // -------------------- 畫花 --------------------
+    function drawFlowers() {
+      flowers.forEach(f => {
+        const screenX = f.x - camera.x;
+        const screenY = f.y - camera.y;
+
+        if (f.poisonous) {
+          ctx.drawImage(poisonFlowerImg, screenX - 20, screenY - 20, 40, 40);
+        } else {
+          ctx.drawImage(flowerImg, screenX - 20, screenY - 20, 40, 40);
+        }
+
+        // 如果這是正在吸食的花，畫讀條
+        if (f === feedingFlower) {
+          const progressRatio = feedingProgress / feedingTime;
+          ctx.beginPath();
+          ctx.arc(screenX, screenY - 30, 15, -Math.PI / 2, -Math.PI / 2 + progressRatio * 2 * Math.PI);
+          ctx.strokeStyle = "yellow";
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        }
+      });
+    }
+
+    // -------------------- 羽化後初始化花系統 --------------------
+    function startFlowerMode() {
+      //clearInterval(milkweedSpawnInterval); // 停止乳草生成
+      flowers = [];
+      feedingFlower = null;
+      feedingProgress = 0;
+      //flowerSpawnInterval = setInterval(spawnFlower, 3000); // 每 3 秒生成一朵
+
+      // 麻雀速度提升
+      const sparrowType = enemyTypes.find(t => t.id === "sparrow");
+      if (sparrowType) {
+        sparrowType.speed = 5;
+      }
+      
+      scheduleEnemyActions();
+    }
+
+    let enemyActionTimer = null;
+
+    function scheduleEnemyActions() {
+      enemyActionTimer = setTimeout(() => {
+        if (!isGamePaused) {
+          enemies.forEach(e => {
+            if (e.id === "scorpion") {
+              shootScorpionProjectile(e);
+            } else if (e.id === "frog") {
+              shootFrogTongue(e);
+            } else if (e.id === "spider") {
+              createSpiderWeb(e);
+            }
+          });
+        }
+        scheduleEnemyActions(); // 再次排程
+      }, 3000);
+    }
+
+    // ------------------------EXP系統、生命、能量----------------------------------------
+    function gainExp(baseAmount) {
+      const gain = Math.round(baseAmount * (1 + (caterpillar.expGainMult || 0)));
+      caterpillar.exp += gain;
+      if (caterpillar.exp >= caterpillar.expToNext) {
+        caterpillar.exp -= caterpillar.expToNext;
+        caterpillar.level++;
+        caterpillar.expToNext = Math.floor(caterpillar.expToNext * 1.2);
+        triggerLevelUpEvent();
+      }
+    }
+
+    function drawPlayerBars() {
+      const barWidth = 60;
+      const barHeight = 6;
+      const screenX = game.width / 2;
+      const screenY = game.height / 2 + caterpillar.radius + 8;
+
+      // 生命條（紅色）
+      uiCtx.fillStyle = "#555";
+      uiCtx.fillRect(screenX - barWidth / 2, screenY, barWidth, barHeight);
+      uiCtx.fillStyle = "#ff4e4e";
+      uiCtx.fillRect(screenX - barWidth / 2, screenY, barWidth * (caterpillar.health / caterpillar.maxHealth), barHeight);
+
+      // 能量條（藍色）
+      const energyY = screenY + barHeight + 4;
+      uiCtx.fillStyle = "#555";
+      uiCtx.fillRect(screenX - barWidth / 2, energyY, barWidth, barHeight);
+      uiCtx.fillStyle = "#33cfff";
+      uiCtx.fillRect(screenX - barWidth / 2, energyY, barWidth * (caterpillar.energy / 100), barHeight);
+    }
+
+    function drawExpBar() {
+      const barWidth = 700;
+      const barHeight = 25;
+      const marginTop = 10;
+
+      uiCtx.fillStyle = "#222";
+      uiCtx.fillRect((game.width - barWidth) / 2, marginTop, barWidth, barHeight);
+      uiCtx.fillStyle = "#88ff88";
+      uiCtx.fillRect((game.width - barWidth) / 2, marginTop, barWidth * (caterpillar.exp / caterpillar.expToNext), barHeight);
+
+      // 畫等級文字
+      uiCtx.fillStyle = "white";
+      uiCtx.font = "bold 30px Times New Roman";
+      uiCtx.textAlign = "center";
+      uiCtx.fillText(`LV. ${caterpillar.level}`, game.width / 2, marginTop + barHeight - 2);
+    }
+    //--------------升級--------------------------------------
+    // 升級項目資料（desc 使用 function 以便動態顯示「選取後」的數值）
+    const upgrades = [
+      { 
+        id: "stealth", 
+        name: "擬態", 
+        desc: () => "靜止 3 秒後進入隱身狀態，移動後失效。隱身時不會遭受任何傷害",
+        maxPick: 1,
+        apply: () => { caterpillar.hasStealth = true; }
+      },
+      { 
+        id: "speedUp", 
+        name: "移速增加 20%", 
+        desc: () => "速度 +20%",
+        maxPick: 3,
+        apply: () => { caterpillar.speed *= 1.2; }
+      },
+      { 
+        id: "visionRangeUp", 
+        name: "視野距離增加 20%", 
+        desc: () => `視野距離 +20%`,
+        maxPick: 3,
+        apply: () => { caterpillarVision.range *= 1.2; }
+      },
+      { 
+        id: "visionAngleUp", 
+        name: "視野角度增加 20%", 
+        desc: () => `視野角度 +20%`,
+        maxPick: 3,
+        apply: () => { caterpillarVision.angle *= 1.2; }
+      },
+      { 
+        id: "maxHpUp", 
+        name: "血量 +20", 
+        desc: () => "最大血量 +20 並回滿血",
+        maxPick: Infinity,
+        apply: () => { 
+          caterpillar.maxHealth += 20; 
+          caterpillar.health = caterpillar.maxHealth;
+        }
+      },
+      { 
+        id: "regen", 
+        name: "自動回血", 
+        desc: () => {
+          const cur = caterpillar.regenRate || 0;
+          const future = cur + 0.01; // 每次 +1%（0.01）
+          return `每秒回復 ${Math.round(future * 100)}% 最大血量`;
+        },
+        maxPick: Infinity,
+        apply: () => {
+          caterpillar.regenRate = (caterpillar.regenRate || 0) + 0.01; // +1%/次
+          caterpillar.hasRegen = true;
+        }
+      },
+      { 
+        id: "energyGainUp", 
+        name: "能量獲取 +20%", 
+        desc: () => "吃乳草/花獲得的能量增加 20%",
+        maxPick: Infinity,
+        apply: () => { caterpillar.energyGainMult = (caterpillar.energyGainMult || 1) + 0.2; }
+      },
+      {
+        id: "expGainUp",
+        name: "經驗值獲取 +20%",
+        desc: () => "獲得的經驗值增加 20%",
+        maxPick: Infinity,
+        apply: () => {
+          caterpillar.expGainMult = (caterpillar.expGainMult || 0) + 0.2;
+        }
+      },
+      { 
+        id: "metamorph", 
+        name: "羽化祝福", 
+        desc: () => "結蛹蛻變成蝴蝶", 
+        maxPick: 1,
+        onlyLevel: 8,
+        apply: () => {
+          // 變身為蝴蝶
+          caterpillarImg = butterflyImg;
+          showKnowledgeDialog(
+            [
+              "毛毛蟲結成蛹，經歷組織液化與細胞重組。",
+              "約八天後破蛹而出，變成蝴蝶。",
+              "蝴蝶的複眼使視野可達 360 度，具高度行動力。",
+              "透過 8 字形飛行，敏捷躲避天敵。"
+            ],
+            150, 200, // 對話框位置
+            () => {
+              caterpillar.isButterfly = true;
+            }
+          );
+          startFlowerMode();
+          caterpillar.speed = Math.max(2 * caterpillar.speed, 6); // 提升速度至至少 8
+
+          // 刪除視野距離、視野角度
+          for (let i = upgrades.length - 1; i >= 0; i--) {
+            if (["visionRangeUp", "visionAngleUp"].includes(upgrades[i].id)) {
+              upgrades.splice(i, 1);
+            }
+          }
+
+          // 加入蝴蝶專屬升級
+          upgrades.push({
+            id: "nectarSpeedUp",
+            name: "進食時間減少 20%",
+            desc: () => {
+              const cur = caterpillar.nectarSpeedMult || 1;
+              const future = cur * 1.2;
+              return `吸食花蜜時間減少 20% (乘算)`;
+            },
+            maxPick: Infinity,
+            apply: () => {
+              caterpillar.nectarSpeedMult = (caterpillar.nectarSpeedMult || 1) * 0.8;
+              feedingTime *= caterpillar.nectarSpeedMult;
+            }
+          });
+        }
+      }
+    ];
+
+    // 記錄升級項目已選次數
+    const upgradePickCount = {};
+
+    // 升級觸發
+    function triggerLevelUpEvent() {
+      if (caterpillar.level === 8) {
+        const blessing = upgrades.find(u => u.id === "metamorph");
+        if (blessing) {
+          showUpgradeChoices([blessing]); // 只顯示羽化祝福
+          return; // 結束函式
+        }
+      }
+
+      const available = upgrades.filter(u => {
+        const count = upgradePickCount[u.id] || 0;
+        if (count >= u.maxPick) return false;
+        if (u.onlyLevel && u.onlyLevel !== caterpillar.level) return false;
+        return true;
+      });
+
+      // 隨機挑 3 個（如果不足 3 個就全給）
+      const choices = [];
+      while (choices.length < 3 && available.length > 0) {
+        const idx = Math.floor(Math.random() * available.length);
+        choices.push(available.splice(idx, 1)[0]);
+      }
+
+      showUpgradeChoices(choices);
+    }
+
+    // 套用升級效果
+    function pickUpgrade(upgrade) {
+      upgrade.apply();
+      upgradePickCount[upgrade.id] = (upgradePickCount[upgrade.id] || 0) + 1;
+    }
+    
+    let currentUpgradeChoices = [];
+    let isGamePaused = false;
+
+    function showUpgradeChoices(choices) {
+      isGamePaused = true; // 暫停遊戲
+      currentUpgradeChoices = choices;
+
+      // 顯示卡片與動態描述
+      choices.forEach((u, i) => {
+        document.getElementById(`upgrade-name-${i}`).textContent = u.name;
+        const descText = (typeof u.desc === 'function') ? u.desc() : u.desc;
+        document.getElementById(`upgrade-desc-${i}`).textContent = descText;
+        document.querySelectorAll(".upgrade-card")[i].style.display = "block";
+      });
+
+      // 如果不足3個，隱藏沒用到的卡
+      for (let i = choices.length; i < 3; i++) {
+        document.getElementById(`upgrade-name-${i}`).textContent = "";
+        document.getElementById(`upgrade-desc-${i}`).textContent = "";
+        document.querySelectorAll(".upgrade-card")[i].style.display = "none";
+      }
+
+      // 顯示容器
+      document.getElementById("upgrade-container").style.display = "flex";
+    }
+
+    function pickUpgradeFromUI(index) {
+      const upgrade = currentUpgradeChoices[index];
+      if (upgrade) {
+        pickUpgrade(upgrade);
+      }
+
+      // 關閉 UI
+      document.getElementById("upgrade-container").style.display = "none";
+      isGamePaused = false; // 恢復遊戲
+    }
+    //--------------擬態----------------------------
+    function enterStealth() {
+      if (!caterpillar.hasStealth) return;
+      caterpillar.isStealthed = true;
+    }
+
+    function exitStealth() {
+      if (!caterpillar.isStealthed) return;
+      caterpillar.isStealthed = false;
+      // 重設停止計時，避免立刻再進入
+      caterpillar.stoppedSince = null;
+    }
+
+    // -------------------- 天敵圖片 --------------------
+    const spiderImg = new Image();
+    spiderImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/spider.png';
+
+    const scorpionImg = new Image();
+    scorpionImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/scorpion.png';
+
+    const sparrowImg = new Image();
+    sparrowImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/sparrow.png';
+
+    const frogImg = new Image();
+    frogImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/frog.png';
+
+    // -------------------- 天敵資料表 --------------------
+    const enemyTypes = [
+      {
+        id: "spider",
+        img: (() => { let i = new Image(); i.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/spider.png'; return i; })(),
+        speed: 1.5,
+        scale: 0.1,
+        rotateWithMovement: true,
+        extraAngle: 0,
+        spawnAsCaterpillar: true
+      },
+      {
+        id: "scorpion",
+        img: (() => { let i = new Image(); i.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/scorpion.png'; return i; })(),
+        speed: 1.2,
+        scale: 0.1,
+        rotateWithMovement: true,
+        extraAngle: Math.PI, // 180 度
+        spawnAsCaterpillar: true
+      },
+      {
+        id: "sparrow",
+        img: (() => { let i = new Image(); i.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/sparrow.png'; return i; })(),
+        speed: 2.5,
+        scale: 3 * 0.1,
+        rotateWithMovement: false,
+        extraAngle: 0,
+        spawnAsCaterpillar: true
+      },
+      {
+        id: "frog",
+        img: (() => { let i = new Image(); i.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/frog.png'; return i; })(),
+        speed: 1.8,
+        scale: 3 * 0.1,
+        rotateWithMovement: true,
+        extraAngle: Math.PI,
+        spawnAsCaterpillar: false
+      }
+    ];
+
+    // -------------------- 天敵系統 --------------------
+    let enemies = [];
+    const enemySpawnInterval = 3000; // 每 3 秒嘗試生成
+    const enemyLifetime = 10000; // 存在 10 秒
+    const enemySafeRadius = 200; // 與玩家距離 < 200px 不生成
+
+    let enemyKnowledgeShown = false;
+
+    let scorpionProjectiles = []; // 蠍子毒針
+    let frogTongues = []; // 存放所有青蛙舌頭
+    const webImg = new Image();
+    webImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/web.png';
+    let spiderWebs = []; // 所有蜘蛛網
+
+
+    function spawnEnemy() {
+      const availableTypes = enemyTypes.filter(t => 
+        caterpillar.isButterfly ? true : t.spawnAsCaterpillar
+      );
+      if (availableTypes.length === 0) return;
+
+      const type = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+
+      let spawnX, spawnY, dist;
+      do {
+        spawnX = caterpillar.worldX + (Math.random() - 0.5) * 1200;
+        spawnY = caterpillar.worldY + (Math.random() - 0.5) * 1200;
+        dist = Math.sqrt((spawnX - caterpillar.worldX) ** 2 + (spawnY - caterpillar.worldY) ** 2);
+      } while (dist < enemySafeRadius);
+
+      enemies.push({
+        type: type, // 存整個 enemyType 物件
+        id: type.id,    // 加這行，例如 "scorpion"
+        x: spawnX,
+        y: spawnY,
+        speed: type.speed,
+        spawnTime: Date.now(),
+        dirX: Math.random() * 2 - 1,
+        dirY: Math.random() * 2 - 1
+      });
+    }
+
+
+    function updateEnemies() {
+      const now = Date.now();
+
+      if (!enemyKnowledgeShown && !isGamePaused) {
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+
+          const dx = e.x - caterpillar.worldX;
+          const dy = e.y - caterpillar.worldY;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < caterpillarVision.range) {
+            // 計算毛毛蟲面對的方向向量
+            const dirX = Math.cos(caterpillar.facingAngle);
+            const dirY = Math.sin(caterpillar.facingAngle);
+
+            // 計算乳草方向向量的單位向量
+            const toEnemyX = dx / dist;
+            const toEnemyY = dy / dist;
+
+            // 內積結果即兩角度差之餘弦值
+            const dot = dirX * toEnemyX + dirY * toEnemyY;
+            const angleBetween = Math.acos(dot);
+
+            if (angleBetween < caterpillarVision.angle / 2) {
+              // ✅ 在視野範圍內
+              showKnowledgeDialog(
+                [
+                  "遠離各種天敵！",
+                  "在你變成蝴蝶後它們會更加兇猛。",
+                  "譬如：蠍子會射出毒針 (紅色三角形)。"
+                ],
+                (e.x - camera.x > 400) ? (e.x - camera.x - 160) : (e.x - camera.x + 160),
+                (e.y - camera.y > 400) ? (e.y - camera.y - 160) : (e.y - camera.y + 160)
+              );
+              enemyKnowledgeShown = true;
+              isGamePaused = true;
+              break;
+            }
+          }
+        }
+      }
+      
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+
+        // 偶爾改變方向（每秒大約 1% 機率）
+        if (
+          e.id !== "spider" ||        // 如果不是蜘蛛，照樣亂跑
+          !e.isChasingPlayer           // 是蜘蛛但沒在追人，也照樣亂跑
+        ) {
+          if (Math.random() < 0.01) {
+            e.dirX = Math.random() * 2 - 1;
+            e.dirY = Math.random() * 2 - 1;
+            const len = Math.sqrt(e.dirX * e.dirX + e.dirY * e.dirY);
+            e.dirX /= len;
+            e.dirY /= len;
+          }
+        }
+
+        // 移動
+        e.x += e.dirX * e.speed;
+        e.y += e.dirY * e.speed;
+
+        // 時間到 -> 消失
+        if (now - e.spawnTime >= enemyLifetime) {
+          enemies.splice(i, 1);
+          continue;
+        }
+
+        // 天敵碰撞檢查（隱形時不檢查）
+        if (!caterpillar.isStealthed) {
+          const dx = caterpillar.worldX - e.x;
+          const dy = caterpillar.worldY - e.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < caterpillar.radius + 20) {
+            caterpillar.health -= 30;
+            caterpillar.damageFlashTime = 0.5;
+            if (caterpillar.health < 0) caterpillar.health = 0;
+            enemies.splice(i, 1);
+          }
+        }
+      }
+    }
+
+    function drawEnemies() {
+      enemies.forEach(e => {
+        const screenX = e.x - camera.x;
+        const screenY = e.y - camera.y;
+        const type = e.type;
+
+        ctx.save();
+        ctx.translate(screenX, screenY);
+
+        if (type.rotateWithMovement) {
+          let angle = Math.atan2(e.dirY, e.dirX) + Math.PI / 2 + type.extraAngle;
+          ctx.rotate(angle);
+        } else {
+          ctx.rotate(type.extraAngle);
+        }
+
+        const drawW = type.img.width * type.scale;
+        const drawH = type.img.height * type.scale;
+
+        // 設定陰影來模擬外框
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 20; // 模糊值
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+        
+        ctx.drawImage(type.img, -drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+      });
+    }
+
+    // --------蠍子毒針相關---------------------------------
+    function shootScorpionProjectile(enemy) {
+      const angle = Math.atan2(enemy.dirY, enemy.dirX); // 用當前移動方向
+      scorpionProjectiles.push({
+        x: enemy.x,
+        y: enemy.y,
+        dirX: Math.cos(angle),
+        dirY: Math.sin(angle),
+        angle: angle,
+        speed: 2,
+        spawnTime: Date.now(),
+        lifespan: 10000
+      });
+    }
+    
+    function updateScorpionProjectiles() {
+      const now = Date.now();
+      for (let i = scorpionProjectiles.length - 1; i >= 0; i--) {
+        const p = scorpionProjectiles[i];
+
+        // 飛行
+        p.x += Math.cos(p.angle) * p.speed;
+        p.y += Math.sin(p.angle) * p.speed;
+
+        // 超時消失
+        if (now - p.spawnTime > p.lifespan) {
+          scorpionProjectiles.splice(i, 1);
+          continue;
+        }
+
+        // 碰撞檢查
+        if (!caterpillar.isStealthed) {
+          const dx = caterpillar.worldX - p.x;
+          const dy = caterpillar.worldY - p.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < caterpillar.radius) {
+            caterpillar.health -= 30;
+            caterpillar.damageFlashTime = 0.5;
+            scorpionProjectiles.splice(i, 1); // 提前消失
+          }
+        }
+      }
+    }
+
+    function drawScorpionProjectiles() {
+      scorpionProjectiles.forEach(p => {
+        const screenX = p.x - camera.x;
+        const screenY = p.y - camera.y;
+
+        ctx.save();
+        ctx.translate(screenX, screenY);
+        ctx.rotate(p.angle);
+        ctx.scale(7, 7); // 放大 7 倍
+
+        // 毒針外觀：短線段
+        ctx.beginPath();
+        ctx.moveTo(0, -2);
+        ctx.lineTo(10, 0);
+        ctx.lineTo(0, 2);
+        ctx.closePath();
+        ctx.fillStyle = "red";
+        ctx.fill();
+
+        ctx.restore();
+      });
+    }
+    //--------------青蛙舌頭相關-------------------------------
+    function shootFrogTongue(frog) {
+      const angle = Math.atan2(frog.dirY, frog.dirX); // 依移動方向決定角度
+      frogTongues.push({
+        frog: frog,
+        angle: angle,
+        length: 150, // 舌頭長度
+        spawnTime: Date.now(),
+        duration: 500 // 存活 500ms
+      });
+    }
+
+
+    function updateFrogTongues() {
+      const now = Date.now();
+      frogTongues = frogTongues.filter(t => now - t.spawnTime < t.duration);
+
+      frogTongues.forEach(t => {
+        const progress = (now - t.spawnTime) / t.duration;
+        const length = t.length * (progress <= 0.5 ? progress * 2 : (1 - progress) * 2); // 0~1~0
+        // 舌頭尖端位置
+        const tipX = t.frog.x + Math.cos(t.angle) * length;
+        const tipY = t.frog.y + Math.sin(t.angle) * length;
+
+        // 隱形時完全不檢測碰撞
+        if (!caterpillar.isStealthed) {
+          const dx = caterpillar.worldX - tipX;
+          const dy = caterpillar.worldY - tipY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < caterpillar.radius) {
+            caterpillar.health = Math.max(0, caterpillar.health - 30);
+            caterpillar.damageFlashTime = 0.5;
+            t.spawnTime = 0; // 讓舌頭立即消失
+          }
+        }
+      });
+    }
+
+    function drawFrogTongues() {
+      const now = Date.now();
+      frogTongues.forEach(t => {
+        // 暫停時，凍結動畫進度（顯示時長不變）
+        const effectiveNow = isGamePaused ? t.spawnTime : now;
+        const progress = (effectiveNow - t.spawnTime) / t.duration;
+        const length = t.length * (progress <= 0.5 ? progress * 2 : (1 - progress) * 2);
+
+        const startX = t.frog.x - camera.x;
+        const startY = t.frog.y - camera.y;
+        const endX = startX + Math.cos(t.angle) * length;
+        const endY = startY + Math.sin(t.angle) * length;
+
+        ctx.strokeStyle = "pink";
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+      });
+    }
+    //--------------蜘蛛網相關-----------------------------------
+    function createSpiderWeb(spider) {
+      spiderWebs.push({
+        x: spider.x,
+        y: spider.y,
+        spawnTime: Date.now(),
+        duration: 10000, // 最多存在 10 秒
+        radius: 40,       // 碰撞判定用
+        creator: spider   // ⬅️ 記錄是哪一隻蜘蛛產生這張網
+      });
+    }
+
+    function updateSpiderWebs() {
+      const now = Date.now();
+
+      // ⬅️ 如果卡住結束時間到了，解除卡住狀態，並移除對應的蜘蛛網
+      if (caterpillar.isStuck && now >= caterpillar.stuckUntil) {
+        caterpillar.isStuck = false;
+
+        if (caterpillar.stuckWeb) {
+          // 把那個特定蜘蛛網從陣列中移除
+          const index = spiderWebs.indexOf(caterpillar.stuckWeb);
+          if (index !== -1) spiderWebs.splice(index, 1);
+          caterpillar.stuckWeb = null;
+        }
+      }
+
+      // ⬅️ 正常移除已過時的蜘蛛網（不會移除被碰到的）
+      spiderWebs = spiderWebs.filter(web => {
+        // 如果是正在綁住蝴蝶的那張，就先保留
+        if (web === caterpillar.stuckWeb) return true;
+        return now - web.spawnTime < web.duration;
+      });
+
+      // ⬅️ 只有沒被卡住時才檢查是否碰到蜘蛛網
+      if (!caterpillar.isStuck) {
+        spiderWebs.forEach(web => {
+          const dx = caterpillar.worldX - web.x;
+          const dy = caterpillar.worldY - web.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < caterpillar.radius + web.radius) {
+            caterpillar.isStuck = true;
+            caterpillar.stuckUntil = now + 3000; // 卡住 3 秒
+            caterpillar.stuckWeb = web; // 記錄是哪張網黏住他
+
+            // 讓該蜘蛛追過來
+            if (web.creator && enemies.includes(web.creator) && web.creator.id === "spider") {
+              const e = web.creator;
+              const len = Math.hypot(caterpillar.worldX - e.x, caterpillar.worldY - e.y);
+              if (len > 0) {
+                e.dirX = (caterpillar.worldX - e.x) / len;
+                e.dirY = (caterpillar.worldY - e.y) / len;
+              }
+              e.speed = 3; // 加速追擊
+            }
+          }
+        });
+      }
+    }
+
+    function drawSpiderWebs() {
+      spiderWebs.forEach(web => {
+        const screenX = web.x - camera.x;
+        const screenY = web.y - camera.y;
+        const drawW = webImg.width * 0.2;
+        const drawH = webImg.height * 0.2;
+
+        ctx.save();
+        ctx.translate(screenX, screenY);
+
+        if (web === caterpillar.stuckWeb) {
+          // 視覺提示：紅色濾光效果
+          ctx.globalAlpha = 1;
+          ctx.filter = "drop-shadow(0 0 10px red)";
+        } else {
+          ctx.globalAlpha = 0.6;
+          ctx.filter = "none";
+        }
+
+        ctx.drawImage(webImg, -drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+      });
+    }
+    //--------------凍結、出現森林------------------------------------------
+    let southMode = false;
+    let freezeStartTime = null;
+    let freezeSpeed = 1; // 每毫秒往下移動的距離
+    let freezeLineY = null;
+    let forestY = null;
+    const forestX = 0;
+
+    const forestImg = new Image();
+    forestImg.src = 'https://raw.githubusercontent.com/BonBonChou/Butterfly_Journey/main/images/forest.png';
+
+    function checkSouthMigrationTrigger() {
+      if (!southMode && caterpillar.level >= 12) {
+        southMode = true;
+        freezeStartTime = Date.now();
+        freezeLineY = caterpillar.worldY - 300; // 初始凍結線稍微在上方
+        forestY = caterpillar.worldY + 4000;    // 森林位置
+
+        showKnowledgeDialog(
+          [
+            "為了躲避嚴寒，你必須一路向南。"
+          ],
+          100, freezeLineY - camera.y,
+          () => {
+            showKnowledgeDialog(
+              [
+                "蝴蝶如何知道自己要飛往哪裡？",
+                "這依舊是個謎。",
+                "蝴蝶觸鬚有追蹤太陽位置的機制。",
+                "還能感知氣流、借助微風省力前進。",
+                "沿著右上角指標飛行，找到最終的目的地！"
+              ],
+              700, 200,
+            );
+          }
+        );
+        isGamePaused = true;
+      }
+    }
+
+    //-------凍結邊界更新與碰撞判定-----------
+    function updateFreezingZone() {
+      if (!southMode) return;
+
+      //const elapsed = Date.now() - freezeStartTime;
+      freezeLineY += freezeSpeed ;
+      //freezeStartTime = Date.now(); // 重設起點以避免累加過大
+
+      if (caterpillar.worldY < freezeLineY) {
+        gameOver(); // 玩家太北邊
+      }
+    }
+
+    //-------森林到達檢查與跳頁----------
+    function checkForestArrival() {
+      if (!southMode) return;
+      const dx = forestX - caterpillar.worldX;
+      const dy = forestY - caterpillar.worldY;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 150) { // 到達範圍
+        localStorage.setItem('gameTime', gameTime);
+        window.location.href = "https://bonbonchou.github.io/Butterfly_Journey/ending.html";
+      }
+    }
+
+    //------畫森林---------------------------
+    function drawForestTarget() {
+      if (!southMode || !forestImg.complete) return;
+
+      const screenX = forestX - camera.x
+      const screenY = forestY - camera.y;
+
+      const drawW = forestImg.width * 0.3;
+      const drawH = forestImg.height * 0.3;
+
+      ctx.save();
+      ctx.translate(screenX, screenY);
+
+      // 🌟 發光效果（簡單光暈）
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300); // 閃爍因子
+      ctx.shadowColor = `rgba(255, 255, 0, ${0.4 + 0.4 * pulse})`;
+      ctx.shadowBlur = 100;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      ctx.drawImage(forestImg, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    }
+
+    //------指南針箭頭與距離提示--------
+    function drawForestCompass() {
+      if (!southMode) return;
+
+      const dx = forestX - caterpillar.worldX;
+      const dy = forestY - caterpillar.worldY;
+      const dist = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx) + Math.PI / 2;
+
+      const centerX = canvas.width - 120;
+      const centerY = 120;
+
+      ctx.save();
+      ctx.translate(centerX, centerY);
+      ctx.rotate(angle);
+      
+      // 畫箭頭
+      ctx.beginPath();
+      ctx.moveTo(0, -20);
+      ctx.lineTo(12, 20);
+      ctx.lineTo(-12, 20);
+      ctx.closePath();
+      ctx.fillStyle = "yellow";
+      ctx.fill();
+
+      ctx.restore();
+
+      // 顯示剩餘公里數
+      const kmLeft = dist.toFixed(1);
+      ctx.font = "32px Arial";
+      ctx.fillStyle = "white";
+      ctx.fillText(`${kmLeft} km`, centerX - 60, centerY + 60);
+    }
+
+    //-----凍結區視覺效果-------------
+    function drawFreezingZone() {
+      if (!southMode) return;
+
+      const screenY = freezeLineY - camera.y;
+
+      ctx.fillStyle = "rgba(150, 220, 255, 0.4)";
+      ctx.fillRect(0, 0, canvas.width, screenY);
+    }
+
+    //--------------更新畫面-----------------------------------
+    let gameTime = 0;
+
+    let lastUpdateTime = Date.now();
+    let dt = 0;
+    function update() {
+      const now = Date.now();
+      if (isGamePaused) {
+        lastUpdateTime = now;
+      }
+      if (!isGamePaused) {
+        dt = (now - lastUpdateTime) / 1000;
+        gameTime += dt;
+      }
+      if (isGamePaused) return; // 暫停時不更新遊戲邏輯
+
+      checkSouthMigrationTrigger();
+
+      if (!isUsingJoystick) {
+        if (caterpillar.isStuck) {
+          caterpillar.vx = 0;
+          caterpillar.vy = 0;
+        } else {
+          // 鍵盤控制時，重設速度
+          caterpillar.vx = 0;
+          caterpillar.vy = 0;
+
+          if (keys["w"]) caterpillar.vy -= 1;
+          if (keys["s"]) caterpillar.vy += 1;
+          if (keys["a"]) caterpillar.vx -= 1;
+          if (keys["d"]) caterpillar.vx += 1;
+
+          // 用畫布的比例來修正
+          const scaleY = canvas.width / canvas.height;
+          let len = Math.hypot(caterpillar.vx, caterpillar.vy * scaleY);
+          if (len > 0) {
+            caterpillar.vx = (caterpillar.vx / len) * caterpillar.speed;
+            caterpillar.vy = (caterpillar.vy / len) * caterpillar.speed;
+            caterpillar.facingAngle = Math.atan2(caterpillar.vy, caterpillar.vx);
+          }
+        }
+      }
+      // ---------- 檢查是否開始或結束隱形 ----------
+      if (caterpillar.hasStealth && !caterpillar.isStuck) { // 如果玩家有擬態能力且沒被蜘蛛網纏住
+        if (caterpillar.vx === 0 && caterpillar.vy === 0) { // 如果現在完全沒移動
+          if (caterpillar.stoppedSince === null) {
+            // 剛開始靜止，記錄時間
+            caterpillar.stoppedSince = Date.now();
+          } else {
+            // 已經靜止一段時間，檢查是否達到 3000ms
+            if (!caterpillar.isStealthed && (Date.now() - caterpillar.stoppedSince >= 3000)) {
+              enterStealth();
+            }
+          }
+        } else {
+          // 有移動 -> 立即退出隱形（如果之前在隱形）
+          if (caterpillar.isStealthed) exitStealth();
+          // 也重設停止計時
+          caterpillar.stoppedSince = null;
+        }
+      }
+      if (!caterpillar.isButterfly) {
+        updateMilkweeds();
+      } else {
+        updateFlowers();
+      }
+
+      updateFreezingZone();
+      
+      updateEnemies();
+      updateScorpionProjectiles();
+      updateFrogTongues();
+      updateSpiderWebs();
+
+      checkForestArrival();
+
+      if (caterpillar.isStuck) {
+        if (Date.now() >= caterpillar.stuckUntil) {
+          caterpillar.isStuck = false; // 解開
+        } else {
+          return; // 提前中斷移動邏輯
+        }
+      }
+
+      if (caterpillar.damageFlashTime > 0) {
+        caterpillar.damageFlashTime -= 0.001 * deltaTime;
+        if (caterpillar.damageFlashTime < 0) {
+          caterpillar.damageFlashTime = 0;
+        }
+      }
+
+      // 位置更新（無論是哪個控制方式）
+      caterpillar.worldX += caterpillar.vx;
+      caterpillar.worldY += caterpillar.vy;
+
+      // 讓相機中心對準角色
+      camera.x = caterpillar.worldX - game.width / 2;
+      camera.y = caterpillar.worldY - game.height / 2;
+    }
+    
+
+    function draw() {
+      // 清除畫面
+      ctx.clearRect(0, 0, game.width, game.height);
+      maskCtx.clearRect(0, 0, game.width, game.height);
+
+      drawBackground();
+      drawFreezingZone();
+
+      if (!caterpillar.isButterfly){
+        drawMilkweeds();
+      } else {
+        drawFlowers();
+      }
+      drawEnemies();
+      drawScorpionProjectiles();
+      drawFrogTongues();
+      drawSpiderWebs();
+
+      drawForestCompass();
+      drawForestTarget();
+
+      // 先畫地圖與物件，再畫黑色遮罩
+      if (!caterpillar.isButterfly) {
+        drawVisionMask(); // 原本毛毛蟲的黑色遮罩
+      }
+      // 再畫毛毛蟲、經驗條，確保它永遠可見
+      drawPlayer();
+      drawPlayerBars();
+      drawExpBar();
+    }
+
+    function drawBackground() {
+      const pattern = ctx.createPattern(grassImg, 'repeat');
+      ctx.save();
+      ctx.globalAlpha = 0.8; // 透明度（0=完全透明，1=不透明）
+      ctx.translate(-camera.x % grassImg.width, -camera.y % grassImg.height);
+      ctx.fillStyle = pattern;
+      ctx.fillRect(-grassImg.width, -grassImg.height, game.width + grassImg.width * 2, game.height + grassImg.height * 2);
+      ctx.restore();
+    }
+
+    function gameOver() {
+      game.running = false;
+      location.href="https://bonbonchou.github.io/Butterfly_Journey/fail_ending.html";
+    }
+
+    let lastTime = 0; // 前一幀的時間
+    let deltaTime = 0; // 這一幀與上一幀的時間差（單位：秒）
+    function gameLoop(timestamp) {
+      if (!game.running) return;
+
+      deltaTime = (timestamp - lastTime);
+      lastTime = timestamp;
+
+
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // =================================== 知識內容 ==================================================================
+    let currentDialogIndex = 0;
+    let currentDialogPages = [];
+    let onDialogEnd = null;
+
+    function showKnowledgeDialog(pages, x, y, onFinish = null) {
+      // 暫停遊戲
+      isGamePaused = true;
+      
+      currentDialogIndex = 0;
+      currentDialogPages = pages;
+      onDialogEnd = onFinish;
+
+      const dialog = document.getElementById("knowledge-dialog");
+      const textEl = document.getElementById("dialog-text");
+      const btn = document.getElementById("dialog-continue-btn");
+
+      // 顯示對話框
+      dialog.style.display = "block";
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = rect.width / game.width;   // X 軸縮放比例
+      const scaleY = rect.height / game.height; // Y 軸縮放比例
+
+      // 把 canvas 座標轉成螢幕座標
+      let screenX = rect.left + (x * scaleX); // rect.left 是 canvas 左上角在螢幕上的位置
+      let screenY = rect.top + (y * scaleY);
+
+      // 設定位置（對話框左上角位置）
+      // 取得實際寬高
+      const dialogWidth = dialog.offsetWidth;
+      const dialogHeight = dialog.offsetHeight;
+      // 修正 X：不超出畫布
+      if (screenX + dialogWidth > rect.right) {
+        screenX = rect.right - dialogWidth - 10;
+      }
+      if (screenX < rect.left) screenX = rect.left + 10;
+
+      // 修正 Y：不超出畫布
+      if (screenY + dialogHeight > rect.bottom) {
+        screenY = rect.bottom - dialogHeight - 10;
+      }
+      if (screenY < rect.top) screenY = rect.top + 10;
+
+      // 更新修正後的位置
+      dialog.style.left = `${screenX}px`;
+      dialog.style.top = `${screenY}px`;
+
+      // 顯示第一段
+      textEl.textContent = pages[currentDialogIndex];
+
+      btn.onclick = () => {
+        currentDialogIndex++;
+        if (currentDialogIndex < currentDialogPages.length) {
+          // 下一頁
+          textEl.textContent = currentDialogPages[currentDialogIndex];
+        } else {
+          // 結束
+          dialog.style.display = "none";
+          isGamePaused = false;
+          if (onDialogEnd) onDialogEnd();
+        }
+      };
+    }
+
+    showKnowledgeDialog(
+      [
+        "毛毛蟲的視野是有限的，只有前方一小塊區域可以看清楚。",
+        "你需要移動身體才能看到更多的世界。",
+        "小心四周，危險可能就在你看不到的地方。"
+      ],
+      150, 200, // 對話框位置
+      () => {
+        showKnowledgeDialog(
+          [
+            "需要透過進食來獲得經驗和補充能量 (藍條)。",
+            "能量耗盡之日，便是葬身之時。",
+            "擁有足夠經驗，就能羽化成蝶。",
+            "開始你新的一生吧！"
+          ],
+          150, 500, // 對話框位置
+        );
+      }
+    );
+
+    // =================================== 虛擬搖桿控制 ==================================================================
+    const joystickContainer = document.getElementById("joystick-container");
+    const joystick = document.getElementById("joystick");
+    let dragging = false;
+    let joyStart = { x: 0, y: 0 };
+
+    // 顯示搖桿並設定初始位置
+    function showJoystick(x, y) {
+      joystickContainer.style.display = "flex";
+      joystickContainer.style.left = `${x - 50}px`; // 中心對齊
+      joystickContainer.style.top = `${y - 50}px`;
+    }
+
+    // 隱藏搖桿
+    function hideJoystick() {
+      joystickContainer.style.display = "none";
+      caterpillar.vx = 0;
+      caterpillar.vy = 0;
+    }
+
+    // 將螢幕座標轉換為 Canvas 內部座標
+    function getCanvasCoordinates(touchEvent) {
+        const rect = canvas.getBoundingClientRect(); // 獲取畫布在螢幕上的實際位置和大小
+        const touch = touchEvent.touches[0];
+
+        // 計算縮放比例
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+
+        // 進行座標轉換
+        const canvasX = (touch.clientX - rect.left) * scaleX;
+        const canvasY = (touch.clientY - rect.top) * scaleY;
+
+        return { x: canvasX, y: canvasY };
+    }
+
+    window.addEventListener("touchstart", (e) => {
+      const touch = e.touches[0];
+      // 視覺上的搖桿依然使用螢幕座標，才能正確顯示在手指下方
+      showJoystick(touch.clientX, touch.clientY); 
+      
+      // 但我們的遊戲邏輯，使用轉換後的畫布座標
+      const coords = getCanvasCoordinates(e);
+      joyStart = { x: coords.x, y: coords.y };
+      dragging = true;
+      isUsingJoystick = true; // 代表當前由搖桿控制
+    });
+
+    window.addEventListener("touchmove", (e) => {
+      if (!dragging) return;
+
+      if (caterpillar.isStuck) {
+        // 被蜘蛛網纏住，不能控制移動
+        caterpillar.vx = 0;
+        caterpillar.vy = 0;
+        return;
+      }
+
+      // 同樣，將當前手指位置也轉換為畫布座標
+      const coords = getCanvasCoordinates(e);
+
+      // dx 和 dy 現在是基於 800x600 畫布的正確向量
+      const dx = coords.x - joyStart.x;
+      const dy = coords.y - joyStart.y;
+
+      const len = Math.hypot(dx, dy); // 因為座標已經被校正，不再需要手動乘以 scaleY
+      if (len > 0) {
+        // 直接用 dx 和 dy 來計算速度，len 會負責將其標準化
+        caterpillar.vx = 1.5 * (dx / len) * caterpillar.speed;
+        caterpillar.vy = 1.5 *(dy / len) * caterpillar.speed;
+      }
+    });
+
+    window.addEventListener("touchend", () => {
+      dragging = false;
+      hideJoystick();
+      isUsingJoystick = false; // 停止使用搖桿控制
+    });
+
+    // 啟動遊戲
+    requestAnimationFrame(gameLoop);
+
+    // === 能量每秒自動減少 ===
+    setInterval(() => {
+      if (!game.running) return;
+      if (isGamePaused) return; // 暫停時暫停這些每秒效果
+
+      // 能量逐秒流失
+      caterpillar.energy -= 1;
+
+      // 自動回血（若有選）
+      if (caterpillar.hasRegen && (caterpillar.regenRate || 0) > 0) {
+        caterpillar.health = Math.min(caterpillar.maxHealth, caterpillar.health + (caterpillar.maxHealth * (caterpillar.regenRate || 0)));
+      }
+
+      if (caterpillar.energy <= 0) {
+        caterpillar.energy = 0;
+        gameOver();
+      }
+      if (caterpillar.health <= 0) {
+        caterpillar.health = 0;
+        gameOver();
+      }
+    }, 1000);
+    setInterval(() => {
+      if (game.running && !isGamePaused) {
+        if (!caterpillar.isButterfly) {
+          spawnMilkweed();  
+        } else {
+          spawnFlower();
+        }
+      }
+    }, 1500);
+    setInterval(() => {
+      if (game.running && !isGamePaused) {
+        spawnEnemy();
+      }
+    }, enemySpawnInterval);
+
+  </script>
+</body>
+</html>
